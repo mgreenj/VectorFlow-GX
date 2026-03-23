@@ -5,3 +5,15 @@
 *.ko
 *.o
 
+.vscode/*
+
+reverse_engineer/*
+**/reverse_engineer
+
+*.vscode
+
+docs/vkf-implementation-comp-wkflw.md
+docs/troubleshooting.md
+docs/inline-processing-perf.md
+docs/dir-structure.md
+docs/refs.md

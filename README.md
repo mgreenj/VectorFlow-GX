@@ -1,10 +1,29 @@
 # Project: GPU-Accelerated SDN for HPC-Kubernetes
 
-## Overview
+## Table of Contents
 
-This project implements a high-performance Software Defined Network (SDN) data plane for Kubernetes, offloading packet processing from the Linux kernel and CPU directly to NVIDIA GPUs. By leveraging **DPDK (Data Plane Development Kit)**, the **gpudev** library, and **GPUDirect RDMA**, this solution bypasses the traditional kernel network stack to provide deterministic latency and massive throughput suitable for High-Performance Computing (HPC) workloads.
+- [Introduction](#introduction)
+- [Technical Architecture](#technical-architecture)
+  - [Linux Kernel Driver PCI P2P Memory Pressure and Telemetry](#kernel-driver-for-telemetry-and-pci-p2p-memory-pressure-monitoring)
+  - [Key Components](#key-components)
+  - [Trying with DPDK](#trying-with-dpdk)
+  - [Switching to NVIDIA DOCA](#switching-to-nvidia-doca-library-and-sdk)
+- [System Setup](#system-setup)
+  - [VectorFlow-GX Installation](#vectorflow-gx-installation)
 
-In a standard Kubernetes environment, the Container Network Interface (CNI) and kernel-space switching introduce significant overhead and jitter. This project replaces that model with a persistent CUDA kernel acting as a programmable forwarding plane, allowing Kubernetes to meet the performance requirements of tightly coupled MPI applications and large-scale data processing.
+## Introduction
+
+While researching programmatic methods for optimizing network traffic in High Performance Computing, I discovered an interesting blog written by an NVIDIA researcher titled: Boosting Inline Packet Processing Using DPDK and GPUdev with GPUs, which introduced me to the concept of GPUDirect RDMA. VectorFlow-GX is my attempt to implement this solution, using GPUDirect RDMA and Infiniband verbs and a buffer-abstraction communication model inspired by EBA.
+
+Simply put, VectorFlow-GX is my own implementation of a high-performance solution for networking in HPC, inspired by the following research and sources:
+
+* [Exposed Buffer Architecture](https://web.eecs.utk.edu/~mbeck/Exposed_Buffer_Architecture.pdf)
+  * [EBA](https://arxiv.org/abs/2209.03488)
+  * [EBA Convergence](https://arxiv.org/abs/2008.00989)
+
+* [Boosting Inline Packet Processing](https://developer.nvidia.com/blog/optimizing-inline-packet-processing-using-dpdk-and-gpudev-with-gpus/)
+
+Why combine RDMA and IB with a buffer-abstraction communication model? I've provided a [detailed explaination in the docs](/docs/tcp-problem-eba.md).
 
 ---
 
@@ -12,59 +31,53 @@ In a standard Kubernetes environment, the Container Network Interface (CNI) and 
 
 The system operates by mapping NIC hardware queues directly to GPU memory addresses, allowing the NIC to DMA packets into a GPU-resident mempool without CPU intervention in the data path.
 
+### Kernel Driver for Telemetry and PCI P2P Memory Pressure Monitoring
 
+I also wrote a Linux character device driver named [gpurdma-mon](https://github.com/mgreenj/gpurdma-mon) that should be used with this program. I've added the driver as a repo submodule, so make sure it's initialized.
 
 ### Key Components
 
-* **CPU Control Plane:** Orchestrates the environment using the DPDK EAL. It manages the lifecycle of the `rte_gpu_comm_list` and provides the NIC with the physical addresses of the GPU mempool.
-* **GPU Data Plane:** A persistent CUDA kernel that polls a communication list in a SIMT (Single Instruction, Multiple Threads) loop. It performs SDN functions such as VXLAN encapsulation, Network Policy enforcement, and NAT.
-* **GPUDirect RDMA:** Enables the Network Interface Card (NIC) to read/write headers and payloads directly to/from Video RAM (VRAM).
-* **Kubernetes Integration:** Utilizes Multus CNI and the SR-IOV Network Operator to provide pods with direct access to the accelerated network interface.
+* **CPU Control Plane:**
+* **GPU Data Plane:**
+* **GPUDirect RDMA:**
+* **DPDK or DOCA SDK/Library:** (see below)
+
+### Trying with DPDK
+
+This project implements a high-performance Software Defined Network (SDN) data plane for Kubernetes, offloading packet processing from the Linux kernel and CPU directly to NVIDIA GPUs. My attempt involved using **DPDK's**, which includes gpudev and cuda libraries, along with GDRCopy. While this solution seems to work, support for GPUDirect RDMA is still a work in progress and some desired functionality isn't available. You can read [my blog post on using DPDK for GPUDirect RDMA](https://blog.mauricegreen.me/blogs/nvidia-gpu-rdma-packet-perf-1/), where I explain in great detail.
+
+Ultimately, I decided to use the DOCA library. It's well documented and provides a lot of capability; the GPUNetIO subsystem is the main component used. 
+
+### Switching to NVIDIA DOCA Library and SDK
+
+I discovered an alternative method for implementing this packet processing data flow, that used the DOCA library and GPUNetIO. The documentation and example programs were enough to persuade me to start over and build my program using DOCA instead of DPDK
 
 ---
 
-## Performance Objectives
+## System Setup
 
-Current Kubernetes networking often forces a trade-off between bandwidth and latency. This implementation aims to optimize both simultaneously:
+To simplify, I created an [system setup guide](/docs/SETUP.md). Please follow setup instructions closely to ensure `VectorFlow-GX` will function as expected.
 
-| Metric | Traditional K8s CNI (Kernel) | GPU-Accelerated SDN |
-| :--- | :--- | :--- |
-| **Latency** | Variable (CPU Jitter/Interrupts) | Deterministic (Persistent Polling) |
-| **Throughput** | Limited by CPU Core Clock/IPC | Scalable via GPU Parallelism |
-| **Packet Rate** | Bottlenecked at ~10-20 Mpps per core | Capable of 100Gbps+ Line Rate |
-| **Isolation** | Shared Kernel Stack | Hardware-level VF Isolation |
+### VectorFlow-GX Installation
 
----
+After completing the system setup guide, run the [VectorFlow-GX deployment script](/scripts/build/install-vectorflow-gx.sh) locally on nodes to install VectorFlow-GX. Example usage is shown below. 
 
-## Implementation Details
+> [!NOTE]
+> Binding refers to NIC binding with a DPDK application
+>
 
-### CPU-GPU Synchronization
-The project utilizes `struct rte_gpu_comm_list` to facilitate low-latency signaling. The CPU populates the list with pointers to received `mbufs` and toggles a status flag. The GPU, monitoring this flag via a volatile pointer in a persistent kernel, immediately begins processing the burst upon detection.
+```
+chmod +x scripts/build/install-vectorflow-gx.sh
 
-### Compiler Optimization
-The CUDA kernels are optimized for the NVIDIA Ampere architecture and later, specifically focusing on:
-* **PTX Analysis:** Monitoring for `ld.global.nc` to ensure cache-efficient polling.
-* **Memory Barriers:** Implementing `__threadfence_system()` to ensure data consistency between the NIC, CPU, and GPU memory domains.
+# Full setup - clone, build, bind NIC
+$  ./scripts/build/install-vectorflow-gx.sh -r https://github.com/you/VectorFlow-GX \
+    -n 0000:c2:00.0 \
+    -g 0000:21:00.0
 
----
+# Build only, no clone, no bind
+$  ./scripts/build/install-vectorflow-gx.sh --no-clone --no-bind -d /home/gpurdma/VectorFlow-GX
 
-## Prerequisites
+# Override CUDA path if different
+$  CUDA_HOME=/usr/local/cuda-13.1 ./scripts/build/install-vectorflow-gx.sh --no-clone -n 0000:c2:00.0
 
-### Hardware
-* NVIDIA GPU (Pascal architecture or newer; Ampere+ recommended for `gpudev` features).
-* NVIDIA ConnectX-5 or newer SmartNIC with GPUDirect RDMA support.
-* PCIe Topology: NIC and GPU should ideally reside on the same PCIe Switch or Root Complex.
-
-### Software
-* **DPDK 22.11+** with `gpudev` enabled.
-* **CUDA Toolkit 11.x/12.x**.
-* **NVIDIA Network Operator** installed on the Kubernetes cluster.
-* **Multus CNI** and **SR-IOV Network Operator**.
-
----
-
-## Usage
-
-1. **Allocate GPU Mempool:** The CPU initializes external memory using `rte_extmem_register` on the GPU VRAM.
-2. **Launch Persistent Kernel:** The GPU starts the SDN processing loop before the first packet arrives.
-3. **Start RX/TX:** The CPU enters the `rte_eth_rx_burst` loop, passing descriptors to the GPU via the communication list.
+```
