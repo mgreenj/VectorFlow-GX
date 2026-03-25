@@ -1,4 +1,4 @@
-# Project: GPU-Accelerated SDN for HPC-Kubernetes
+# Project: GPU-Accelerated Packet Processing for HPC
 
 ## Table of Contents
 
