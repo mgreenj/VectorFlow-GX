@@ -44,7 +44,7 @@ I also wrote a Linux character device driver named [gpurdma-mon](https://github.
 
 ### Trying with DPDK
 
-My attempt involved using **DPDK's**, which includes gpudev and cuda libraries, along with GDRCopy. While this solution seems to work, support for GPUDirect RDMA is still a work in progress and some desired functionality isn't available. You can read [my blog post on using DPDK for GPUDirect RDMA](https://blog.mauricegreen.me/blogs/nvidia-gpu-rdma-packet-perf-1/), where I explain in great detail.
+My attempt involved using **DPDK's**, which includes gpudev and cuda libraries, along with GDRCopy. While this solution seems to work, support for GPUDirect RDMA is still a work in progress and some desired functionality isn't available. You can read [my blog post on using DPDK for GPUDirect RDMA](https://blog.mauricegreen.me/blog/nvidia-gpu-rdma-packet-perf-1/), where I explain in great detail.
 
 Ultimately, I decided to use the DOCA library. It's well documented and provides a lot of capability; the GPUNetIO subsystem is the main component used. 
 
